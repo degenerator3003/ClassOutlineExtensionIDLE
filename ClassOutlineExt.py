@@ -36,6 +36,68 @@ class ClassOutlineExt:
         # optional mapping of raw sequences to method names you want handled by extension
         # e.g. {'<Control-Shift-KeyRelease-Insert>': 'z_in_event'}
         self._global_key_map = {}
+        self._func_calls = {}  # qual -> list[(label, lineno)]
+
+    def _format_callee(self, func_expr):
+        """Return a readable label for ast.Call.func."""
+        import ast
+        # foo(...)
+        if isinstance(func_expr, ast.Name):
+            return func_expr.id
+        # obj.attr(...), possibly chained: pkg.mod.func
+        if isinstance(func_expr, ast.Attribute):
+            parts = []
+            cur = func_expr
+            while isinstance(cur, ast.Attribute):
+                parts.append(cur.attr)
+                cur = cur.value
+            if isinstance(cur, ast.Name):
+                parts.append(cur.id)
+            else:
+                parts.append("<expr>")
+            parts.reverse()
+            return ".".join(parts)
+        # something else (callable return, subscript, lambda, etc.)
+        return "<call>"
+
+    def _collect_calls(self, func_node, current_class=None):
+        """Collect (label, lineno) for calls inside func_node, but
+        skip nested defs/classes to avoid double counting."""
+        import ast
+        calls = []
+
+        class CV(ast.NodeVisitor):
+            def visit_Call(self, node):
+                try:
+                    label = self.outer._format_callee(node.func)
+                except Exception:
+                    label = "<call>"
+                ln = getattr(node, "lineno", 1)
+                calls.append((label, ln))
+                self.generic_visit(node)
+
+            # stop at nested scopes (but we won't call visit() on the root FunctionDef)
+            def visit_FunctionDef(self, node): pass
+            def visit_AsyncFunctionDef(self, node): pass
+            def visit_ClassDef(self, node): pass
+
+        cv = CV()
+        cv.outer = self
+        # IMPORTANT: walk only the body of the current function
+        for stmt in getattr(func_node, "body", []):
+            cv.visit(stmt)
+
+        # de-dup but keep first occurrence order
+        seen, out = set(), []
+        for lab, ln in calls:
+            key = (lab, ln)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append((lab, ln))
+        return out
+
+
 
 
     def _register_global_shortcuts(self):
@@ -322,23 +384,30 @@ class ClassOutlineExt:
             self._set_tree_items([("Parse error (invalid syntax)", "err", 1, None)])
             return
 
+        # before parsing/visiting (right after parsing succeeds)
+        self._func_calls = {}
+
         items = []
 
-        def visit(node, parent_qual=None):
+        def visit(node, parent_qual=None, class_stack=()):
             for n in getattr(node, "body", []):
                 if isinstance(n, ast.ClassDef):
                     qual = f"{parent_qual}.{n.name}" if parent_qual else n.name
                     items.append((qual, "class", n.lineno, parent_qual))
-                    visit(n, parent_qual=qual)
+                    visit(n, parent_qual=qual, class_stack=class_stack + (n.name,))
                 elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     kind = "async def" if isinstance(n, ast.AsyncFunctionDef) else "def"
                     qual = f"{parent_qual}.{n.name}" if parent_qual else n.name
                     items.append((qual, kind, n.lineno, parent_qual))
-                    visit(n, parent_qual=qual)
+                    # NEW: collect calls for this function only (not nested defs)
+                    current_class = class_stack[-1] if class_stack else None
+                    self._func_calls[qual] = self._collect_calls(n, current_class=current_class)
+                    # still visit for nested defs (but calls are collected per their own node)
+                    visit(n, parent_qual=qual, class_stack=class_stack)
                 else:
-                    visit(n, parent_qual=parent_qual)
+                    visit(n, parent_qual=parent_qual, class_stack=class_stack)
 
-        visit(parsed, parent_qual=None)
+        visit(parsed, parent_qual=None, class_stack=())
         self._set_tree_items(items)
 
     def _set_tree_items(self, items):
@@ -373,19 +442,38 @@ class ClassOutlineExt:
 
         def insert_children(parent_iid, parent_qual):
             children = mapping.get(parent_qual, [])
-            children.sort(key=lambda t: t[2])
+            children.sort(key=lambda t: t[2])  # by lineno
             for qual, kind, lineno in children:
                 short_name = qual.split(".")[-1]
                 text = f"{short_name}  —  {kind}  (L{lineno})"
-                # use the qualified name as the iid so we can restore open/selection by qual
                 iid = qual
-                # insert with explicit iid and store lineno in values
                 try:
                     self._tree.insert(parent_iid, "end", iid=iid, text=text, values=(lineno,))
                 except Exception:
-                    # fallback: let Treeview choose iid
                     iid = self._tree.insert(parent_iid, "end", text=text, values=(lineno,))
+
+                # build normal AST children first
                 insert_children(iid, qual)
+
+                # NEW: calls subtree for functions
+                if kind in ("def", "async def"):
+                    calls = self._func_calls.get(qual, [])
+                    if calls:
+                        # header
+                        header_iid = f"{qual}::calls"
+                        try:
+                            self._tree.insert(iid, "end", iid=header_iid, text="calls:", values=())
+                        except Exception:
+                            header_iid = self._tree.insert(iid, "end", text="calls:", values=())
+                        # each call row (double-click jumps to call line via stored value)
+                        for idx, (label, cln) in enumerate(calls):
+                            cid = f"{qual}::call::{idx}:{cln}"
+                            ctext = f"→ {label}  (L{cln})"
+                            try:
+                                self._tree.insert(header_iid, "end", iid=cid, text=ctext, values=(cln,))
+                            except Exception:
+                                self._tree.insert(header_iid, "end", text=ctext, values=(cln,))
+
 
         insert_children("", None)
 
