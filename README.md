@@ -1,0 +1,2 @@
+# ClassOutlineExtensionIDLE
+class outline
