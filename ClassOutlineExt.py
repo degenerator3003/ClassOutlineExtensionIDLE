@@ -38,6 +38,24 @@ class ClassOutlineExt:
         self._global_key_map = {}
         self._func_calls = {}  # qual -> list[(label, lineno)]
 
+        self._find_win = None
+        self._find_vars = None  # tuple of tk vars; created when dialog opens
+        self._find_last_iid = None
+
+        self._title_base = "Outline — Classes & Functions"
+        self._title_focused_prefix = "🟢 "   # pick any symbol you like
+        self._title_unfocused_prefix = "❌ "  # pick any symbol you like
+
+    def _apply_title(self, focused: bool):
+        """Update window title based on focus state."""
+        if not self._win:
+            return
+        prefix = self._title_focused_prefix if focused else self._title_unfocused_prefix
+        try:
+            self._win.title(f"{prefix}{self._title_base}")
+        except Exception:
+            pass
+
     def _format_callee(self, func_expr):
         """Return a readable label for ast.Call.func."""
         import ast
@@ -193,6 +211,7 @@ class ClassOutlineExt:
                     try:
                         win.deiconify()
                         win.lift()
+                        self._apply_title(True)
                         try:
                             self._register_global_shortcuts()
                         except Exception:
@@ -232,7 +251,10 @@ class ClassOutlineExt:
 
         # Create the Toplevel first (so we can use it as master and measure sizes)
         self._win = tk.Toplevel(parent)
-        self._win.title("Outline — Classes & Functions")
+        #self._win.title("Outline — Classes & Functions")
+        self._apply_title(True)
+        self._win.bind("<FocusIn>",  lambda e: self._apply_title(True))
+        self._win.bind("<FocusOut>", lambda e: self._apply_title(False))
         self._win.protocol("WM_DELETE_WINDOW", self._hide_window)
 
         # Try to make it transient to the editor window (gives window manager hints)
@@ -250,11 +272,13 @@ class ClassOutlineExt:
         self._tree = ttk.Treeview(frame, show="tree")
         self._tree.pack(fill="both", expand=True, side="top")
         self._tree.bind("<Double-1>", self._on_tree_double)
-
+        
+        
         btn_frame = ttk.Frame(frame)
         btn_frame.pack(fill="x", side="bottom", pady=(6, 0))
         ttk.Button(btn_frame, text="Refresh", command=self._update).pack(side="left")
         ttk.Button(btn_frame, text="Close", command=self._hide_window).pack(side="right")
+        self._win.bind("<Control-f>", self._open_find_dialog)
         # -- end UI creation (if your original code had more widgets, keep them) --
 
         # Ensure widgets are created and sizes known
@@ -327,6 +351,7 @@ class ClassOutlineExt:
             # withdraw (hide) rather than destroy, so we can restore later
             if tk.Toplevel.winfo_exists(self._win):
                 try:
+                    self._apply_title(False)
                     self._win.withdraw()
                 except Exception:
                     # if withdraw fails, attempt to destroy to avoid orphaned widgets
@@ -515,5 +540,237 @@ class ClassOutlineExt:
                 self.editwin.text.focus()
             except Exception:
                 pass
+
+
+    def _open_find_dialog(self, event=None):
+        # Reuse if already open
+        if self._find_win and tk.Toplevel.winfo_exists(self._find_win):
+            self._find_win.deiconify()
+            self._find_win.lift()
+            try:
+                self._find_vars[0].focus_set()  # pattern entry
+            except Exception:
+                pass
+            return
+
+        # Build a small dialog
+        self._find_win = tk.Toplevel(self._win)
+        self._find_win.title("Find in Outline")
+        self._find_win.transient(self._win)
+        self._find_win.resizable(False, False)
+        self._find_win.protocol("WM_DELETE_WINDOW", self._find_win.withdraw)
+
+        f = ttk.Frame(self._find_win, padding=6); f.pack(fill="both", expand=True)
+
+        # Row 0: pattern
+        ttk.Label(f, text="Find:").grid(row=0, column=0, sticky="w")
+        pat = tk.StringVar(master=self._find_win, value="")
+        ent = ttk.Entry(f, textvariable=pat, width=34)
+        ent.grid(row=0, column=1, columnspan=6, sticky="we", padx=(6,0))
+        ent.bind("<Return>", lambda e: self._do_find_next())
+
+        # Row 1: regex / ignore case
+        rx  = tk.IntVar(master=self._find_win, value=0)   # regex?
+        ic  = tk.IntVar(master=self._find_win, value=1)   # ignore case?
+        ttk.Checkbutton(f, text="Regex",        variable=rx).grid(row=1, column=1, sticky="w", pady=(6,0))
+        ttk.Checkbutton(f, text="Ignore case",  variable=ic).grid(row=1, column=2, sticky="w", pady=(6,0))
+
+        # Row 2: direction + whole + wrap
+        ttk.Label(f, text="Direction:").grid(row=2, column=0, sticky="w", pady=(6,0))
+        dirv = tk.IntVar(master=self._find_win, value=1)   # 1=Down, -1=Up
+        ttk.Radiobutton(f, text="Down", variable=dirv, value=1).grid(row=2, column=1, sticky="w", pady=(6,0))
+        ttk.Radiobutton(f, text="Up",   variable=dirv, value=-1).grid(row=2, column=2, sticky="w", pady=(6,0))
+
+        whole = tk.IntVar(master=self._find_win, value=0)
+        wrap  = tk.IntVar(master=self._find_win, value=1)
+        ttk.Checkbutton(f, text="Whole word",  variable=whole).grid(row=2, column=3, sticky="w", pady=(6,0))
+        ttk.Checkbutton(f, text="Wrap around", variable=wrap).grid(row=2, column=4, sticky="w", pady=(6,0))
+
+        # Row 3: area filters
+        ttk.Label(f, text="Search in:").grid(row=3, column=0, sticky="w", pady=(6,0))
+        in_cls = tk.IntVar(master=self._find_win, value=1)
+        in_fun = tk.IntVar(master=self._find_win, value=1)
+        in_cal = tk.IntVar(master=self._find_win, value=1)
+        ttk.Checkbutton(f, text="Classes",   variable=in_cls).grid(row=3, column=1, sticky="w", pady=(6,0))
+        ttk.Checkbutton(f, text="Functions", variable=in_fun).grid(row=3, column=2, sticky="w", pady=(6,0))
+        ttk.Checkbutton(f, text="Calls",     variable=in_cal).grid(row=3, column=3, sticky="w", pady=(6,0))
+
+        # Row 4: buttons
+        btnf = ttk.Frame(f); btnf.grid(row=4, column=0, columnspan=6, sticky="e", pady=(8,0))
+        ttk.Button(btnf, text="Find Next", command=self._do_find_next).pack(side="left")
+        ttk.Button(btnf, text="Close", command=self._find_win.withdraw).pack(side="left", padx=(6,0))
+
+        # Save vars (extended tuple: add dirv, whole, wrap at the end)
+        self._find_vars = (ent, pat, rx, ic, in_cls, in_fun, in_cal, dirv, whole, wrap)
+
+        # place near parent
+        self._find_win.update_idletasks()
+        try:
+            px = self._win.winfo_rootx(); py = self._win.winfo_rooty()
+            self._find_win.geometry(f"+{px+40}+{py+40}")
+        except Exception:
+            pass
+
+        ent.focus_set()
+
+
+    def _do_find_next(self):
+        if not self._tree or not self._find_vars:
+            return
+        ent, pat, rx, ic, in_cls, in_fun, in_cal, dirv, whole, wrap = self._find_vars
+        pattern = pat.get()
+        if not pattern:
+            return
+
+        # What to search in
+        kinds = set()
+        if in_cls.get(): kinds.add("class")
+        if in_fun.get(): kinds.update(("def", "async def"))
+        if in_cal.get(): kinds.add("call")
+
+        # Flatten items
+        items = self._gather_tree_items(kinds=kinds)
+        n = len(items)
+        if n == 0:
+            return
+
+        # Determine start index
+        start_idx = -1
+        ids = [iid for iid, _, _ in items]
+        sel = self._tree.selection()
+        if sel and sel[0] in ids:
+            start_idx = ids.index(sel[0])
+        elif self._find_last_iid and self._find_last_iid in ids:
+            start_idx = ids.index(self._find_last_iid)
+
+        # Build matcher
+        import re
+        flags = re.IGNORECASE if ic.get() else 0
+
+        if rx.get():
+            pat_str = pattern
+            if whole.get():
+                pat_str = rf"\b(?:{pattern})\b"
+            try:
+                cre = re.compile(pat_str, flags)
+                def matches(s): return cre.search(s) is not None
+            except re.error:
+                return
+        else:
+            if whole.get():
+                # true whole-word match for plain search
+                cre = re.compile(rf"\b{re.escape(pattern)}\b", flags)
+                def matches(s): return cre.search(s) is not None
+            else:
+                needle = pattern.lower() if ic.get() else pattern
+                def matches(s):
+                    s2 = s.lower() if ic.get() else s
+                    return needle in s2
+
+        # Direction & wrap
+        direction = dirv.get()  # 1=down, -1=up
+
+        def try_match(idx):
+            iid, kind, label = items[idx]
+            if matches(label):
+                self._find_last_iid = iid
+                self._expand_to(iid)
+                try:
+                    self._tree.selection_set(iid)
+                    self._tree.see(iid)
+                except Exception:
+                    pass
+                self._navigate_to_iid(iid)
+                return True
+            return False
+
+        if direction == 1:
+            # DOWN
+            if start_idx == -1:
+                start_idx = -1
+            # first pass: start_idx+1 .. n-1
+            for idx in range(start_idx + 1, n):
+                if try_match(idx): return
+            if wrap.get():
+                for idx in range(0, start_idx + 1):
+                    if try_match(idx): return
+        else:
+            # UP
+            if start_idx == -1:
+                start_idx = n
+            # first pass: start_idx-1 .. 0
+            for idx in range(start_idx - 1, -1, -1):
+                if try_match(idx): return
+            if wrap.get():
+                for idx in range(n - 1, start_idx - 1, -1):
+                    if try_match(idx): return
+
+        # no match -> beep
+        try:
+            (self._find_win or self._win).bell()
+        except Exception:
+            pass
+
+
+    def _gather_tree_items(self, kinds):
+        """Flatten tree into (iid, kind, label) for the requested kinds."""
+        out = []
+        def kind_of(iid, text):
+            # calls header
+            if iid.endswith("::calls"):
+                return None
+            # call leaf
+            if "::call::" in iid:
+                return "call"
+            # infer from node text: "... —  class/def/async def (L...)"
+            try:
+                left, right = text.split("—", 1)
+                kpart = right.strip().split("(", 1)[0].strip()
+                return kpart if kpart in ("class", "def", "async def") else None
+            except Exception:
+                return None
+
+        def walk(parent=""):
+            for iid in self._tree.get_children(parent):
+                text = self._tree.item(iid, "text") or ""
+                k = kind_of(iid, text)
+                if k and k in kinds:
+                    # label to search: use displayed text (includes name and kind)
+                    out.append((iid, k, text))
+                walk(iid)
+        walk("")
+        return out
+
+    def _expand_to(self, iid):
+        # open all ancestors so selection is visible
+        p = iid
+        parents = []
+        while True:
+            p = self._tree.parent(p)
+            if not p:
+                break
+            parents.append(p)
+        for a in reversed(parents):
+            try:
+                self._tree.item(a, open=True)
+            except Exception:
+                pass
+
+    def _navigate_to_iid(self, iid):
+        """Jump to the line stored in item values (works for class/def/call rows)."""
+        vals = self._tree.item(iid, "values")
+        if not vals:
+            return
+        try:
+            lineno = int(vals[0])
+        except Exception:
+            return
+        try:
+            self.editwin.text.mark_set("insert", f"{lineno}.0")
+            self.editwin.text.see(f"{lineno}.0")
+            self.editwin.text.focus_set()
+        except Exception:
+            pass
+            
 
 # end of file
