@@ -1,0 +1,11 @@
+##################################
+## Add to 
+## config-extensions.def
+## 
+[ClassOutlineExt]
+enable = True
+enable_shell = False
+enable_editor = True
+[ClassOutlineExt_bindings]
+toggle-outline-window=<Control-e>
+
