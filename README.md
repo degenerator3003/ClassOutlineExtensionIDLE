@@ -1,80 +1,84 @@
-# ClassOutlineExt — IDLE Class & Function Outline
+# ClassOutlineExt — IDLE Outline (Classes • Functions • Calls) + Find
 
-Lightweight **IDLE** extension that shows a tree of classes and functions for the current editor buffer.  
-Double-click any item to jump to its line. The window updates as you edit and opens next to the editor.
+Lightweight **IDLE** extension that shows a live outline of the current editor buffer.  
+It nests a **calls:** list under each function and includes a **Find** dialog (Ctrl+F in the outline window) with direction and whole-word/wrap options. Double-click any row to jump to that line in the editor.
 
 ## Features
-- Class/function tree built from `ast` (no third-party deps).
-- Double-click to jump to definition.
-- Auto refresh (polling the buffer every second).
-- Opens near the editor window; toggle open/close from the Edit menu.
-- Optional global shortcut binding so the toggle works even when the outline window is focused.
+- **Outline tree** of `class`, `def`, `async def` (AST-based, no third-party deps).
+- **Calls under each function** — shows syntactic call targets like `foo()`, `self.bar()`, `pkg.mod.func()` with line numbers; double-click to jump.
+- **Find dialog** (press **Ctrl+F** while the outline window is focused):
+  - **Direction:** Up / Down
+  - **Whole word**, **Wrap around**
+  - **Regex**, **Ignore case**
+  - **Area filters:** search in **Classes**, **Functions**, **Calls**
+  - Selects/expands the matching row and moves the editor caret to its line.
+- **Opens near the editor**, auto-refreshes while you type, and preserves expanded nodes/selection.
+- **Focus indicator** in the window title (e.g., green when focused, grey when not) so you know which window has the keys.
 
-## Installation
-1. **Find your `idlelib` folder** (where IDLE looks for extensions):
-   ```bash
-   python -c "import idlelib, os; print(os.path.dirname(idlelib.__file__))"
+> Note: Call extraction is static (AST only). Dynamic/indirect calls may appear as `<call>`.
 
+---
 
-2. **Copy the file** into that folder:
-    
-    - Windows (PowerShell):
-        
+## Install
+
+1. **Locate your `idlelib`** (the folder where IDLE looks for extensions):
+
+    ```bash
+    python -c "import idlelib, os; print(os.path.dirname(idlelib.__file__))"
+    ```
+
+2. **Copy `ClassOutlineExt.py`** into that folder.
+
+    - **Windows (PowerShell):**
+
         ```powershell
         $dest = (python -c "import idlelib, os; print(os.path.dirname(idlelib.__file__))")
         Copy-Item .\ClassOutlineExt.py "$dest\ClassOutlineExt.py"
         ```
-        
-    - macOS/Linux:
-        
+
+    - **macOS / Linux:**
+
         ```bash
         cp ClassOutlineExt.py "$(python -c 'import idlelib, os; print(os.path.dirname(idlelib.__file__))')"
         ```
-        
-3. **Enable the extension** in IDLE:
-    
-    - In IDLE: `Options → Configure IDLE… → Extensions` → enable **ClassOutlineExt** for the Editor, or
-        
-    - Create/edit `~/.idlerc/config-extensions.cfg` and add:
-        
 
+3. **Enable the extension** in IDLE:
+    - `Options → Configure IDLE… → Extensions` → enable **ClassOutlineExt** for the Editor, or
+    - Add to `~/.idlerc/config-extensions.cfg`:
+
+        ```ini
         [ClassOutlineExt]
         enable = True
         enable_shell = False
         enable_editor = True
-        
+
         [ClassOutlineExt_bindings]
         toggle-outline-window = <Control-e>
-        
-        
+        ```
+
 4. **Restart IDLE**.
-    
 
-## Usage
+---
 
-- Open a Python file in the IDLE Editor.
-    
-- Use `Edit → Outline` (or **Ctrl+E** if you set the binding) to show/hide the outline.
-    
-- Double-click a class/function to jump to its definition.
-    
-- Click **Refresh** if you’ve disabled auto updates.
-    
+## Use
 
-## Notes
+- Open a `.py` file in the IDLE **Editor**.
+- Show/hide via **Edit → Outline** (or your `<Control-e>` binding).
+- Expand a function to see its **calls:**; double-click a class/function/call to jump.
+- Press **Ctrl+F** in the outline window to open **Find**:
+  - Choose **Up/Down**, **Whole word**, **Wrap around**, **Regex/Ignore case**, and restrict to **Classes / Functions / Calls**.
+  - Click **Find Next** (or press **Enter**) to select the next match and jump the editor caret.
 
-- The extension class is `ClassOutlineExt` and installs a menu command `_Outline` under **Edit**.
-    
-- Example config snippet (section name **must** match the class name) is shown above and in `conf_note.txt`.
-    
+---
 
 ## Troubleshooting
 
-- **Don’t see “Outline” under Edit?** Confirm the file is in the same `idlelib` folder IDLE is using (step 1) and that the extension is enabled. Fully restart IDLE after changes.
-    
-- **Shortcut doesn’t work?** Ensure you added the `[ClassOutlineExt_bindings]` section and restart IDLE. Some key combos can be OS-reserved—try a different one if needed.
-    
+- **No “Outline” menu?** Make sure the file is in the same `idlelib` you printed in step 1, enable the extension, and restart IDLE.
+- **Ctrl+F doesn’t open the dialog?** Give focus to the outline window (its title changes to the “focused” icon), then press **Ctrl+F**.
+- **Calls look incomplete?** Only syntactic calls are listed; nested function bodies are indexed under their own node; dynamic calls show as `<call>`.
+
+---
 
 ## License
 
-MIT — see `LICENSE`.
+MIT
